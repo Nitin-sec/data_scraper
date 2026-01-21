@@ -1,0 +1,6 @@
+sqlalchemy==1.4.46
+pymysql==1.0.2
+telethon==1.36.0
+beautifulsoup4==4.11.1
+curl-cffi==0.5.9
+python-dotenv==1.0.0

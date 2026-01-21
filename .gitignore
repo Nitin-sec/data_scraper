@@ -1,0 +1,44 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Virtual Environments ---
+venv/
+env/
+.env/
+.venv/
+
+# --- Environment Variables (Crucial Security) ---
+.env
+.env.local
+.env.backup
+
+# --- Database ---
+*.db
+*.sqlite3
+jobs.db
+
+# --- Logs ---
+*.log
+*.log.*
+logs/
+app.log
+ingest.log*
+
+# --- IDEs & Editors ---
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db
