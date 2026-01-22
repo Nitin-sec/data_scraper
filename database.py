@@ -9,6 +9,8 @@ Base = declarative_base()
 class PlatformEnum(enum.Enum):
     TELEGRAM = 'telegram'
     JOOBLE = 'jooble'
+    REMOTIVE = 'remotive'
+    WELLFOUND = 'wellfound'
     NAUKRI = 'naukri'
     LINKEDIN = 'linkedin'
     INDEED = 'indeed'
