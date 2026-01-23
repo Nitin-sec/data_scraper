@@ -146,10 +146,8 @@ class RemotiveEngine:
             return None
     
     def _is_job_newer(self, job: RemotiveJob, since_timestamp: datetime) -> bool:
-        """Check if job is newer than the given timestamp"""
-        if not job.posted_at:
-            return True  # Include jobs without timestamp
-        return job.posted_at.replace(tzinfo=None) > since_timestamp.replace(tzinfo=None)
+        """Always return True - timestamp filtering temporarily disabled"""
+        return True
     
     def save_jobs_to_db(self, jobs: List[RemotiveJob]) -> tuple[int, int]:
         """Save jobs to database with deduplication"""
@@ -201,10 +199,14 @@ class RemotiveEngine:
             
             if inserted_count > 0:
                 session.commit()
-                logger.info(f"New jobs inserted: {inserted_count}")
+                logger.info(f"DB INSERT CONFIRMED: {inserted_count} rows added to jobs table")
             
             if duplicate_count > 0:
                 logger.info(f"Duplicates skipped: {duplicate_count}")
+                
+            # Verify data was actually saved
+            total_jobs = session.query(Job).count()
+            logger.info(f"Total jobs in database: {total_jobs}")
                 
         except Exception as e:
             session.rollback()

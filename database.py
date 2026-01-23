@@ -11,6 +11,7 @@ class PlatformEnum(enum.Enum):
     JOOBLE = 'jooble'
     REMOTIVE = 'remotive'
     WELLFOUND = 'wellfound'
+    ADZUNA = 'adzuna'
     NAUKRI = 'naukri'
     LINKEDIN = 'linkedin'
     INDEED = 'indeed'

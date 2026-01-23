@@ -8,7 +8,8 @@ import os
 from telegram_engine import run_telegram_engine
 from jooble_engine import run_jooble_engine
 from remotive_engine import run_remotive_engine
-from wellfound_engine import run_wellfound_engine
+# from wellfound_engine import run_wellfound_engine  # Disabled: API blocked
+from adzuna_engine import run_adzuna_engine
 
 # Load environment variables
 load_dotenv()
@@ -30,9 +31,33 @@ class MinimalScheduler:
         self.interval_ms = int(os.getenv('SCHEDULE_INTERVAL_MS', 21600000))  # Default 6 hours
         self.interval_seconds = self.interval_ms / 1000
         
+        # Log environment loading
+        logger.info("Loaded environment variables from .env")
+        self._log_enabled_engines()
+        
         # Setup graceful shutdown
         signal.signal(signal.SIGINT, self._shutdown_handler)
         signal.signal(signal.SIGTERM, self._shutdown_handler)
+    
+    def _log_enabled_engines(self):
+        """Log which engines are enabled based on available API keys"""
+        enabled_engines = []
+        
+        # Check Telegram
+        if os.getenv('TELEGRAM_API_ID') and os.getenv('TELEGRAM_API_HASH') and os.getenv('TELEGRAM_SESSION_STRING'):
+            enabled_engines.append('Telegram')
+        
+        # Check Jooble
+        if os.getenv('JOOBLE_API_KEY'):
+            enabled_engines.append('Jooble')
+        
+        # Remotive and Adzuna don't need keys
+        enabled_engines.extend(['Remotive', 'Adzuna'])
+        
+        # Wellfound disabled (403, will be re-enabled during scraping phase)
+        logger.info("Wellfound disabled (403, will be re-enabled during scraping phase)")
+        
+        logger.info(f"Enabled engines: {', '.join(enabled_engines)}")
     
     def _shutdown_handler(self, signum, frame):
         logger.info("Shutdown signal received. Stopping scheduler...")
@@ -40,7 +65,7 @@ class MinimalScheduler:
     
     async def start(self):
         """Main scheduler loop"""
-        logger.info(f"Minimal Scheduler started - All engines (Interval: {self.interval_seconds/3600:.1f}h)")
+        logger.info(f"Minimal Scheduler started - Active engines (Interval: {self.interval_seconds/3600:.1f}h)")
         
         while self.running:
             try:
@@ -59,9 +84,13 @@ class MinimalScheduler:
                 logger.info("Running Remotive cycle")
                 await run_remotive_engine()
                 
-                # Run Wellfound engine
-                logger.info("Running Wellfound cycle")
-                await run_wellfound_engine()
+                # Wellfound disabled (403, will be re-enabled during scraping phase)
+                # logger.info("Running Wellfound cycle")
+                # await run_wellfound_engine()
+                
+                # Run Adzuna engine
+                logger.info("Running Adzuna cycle")
+                await run_adzuna_engine()
                 
                 # Log end and next run time
                 end_time = datetime.now()

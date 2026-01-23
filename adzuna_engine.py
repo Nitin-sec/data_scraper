@@ -19,12 +19,12 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("JoobleEngine")
+logger = logging.getLogger("AdzunaEngine")
 
-class JoobleJob:
+class AdzunaJob:
     def __init__(self, title: str, company: str, location: str, description: str, 
                  apply_link: Optional[str] = None, posted_at: Optional[datetime] = None, 
-                 source: str = "jooble", external_id: Optional[str] = None):
+                 source: str = "adzuna", external_id: Optional[str] = None):
         self.title = title
         self.company = company
         self.location = location
@@ -45,13 +45,13 @@ class JoobleJob:
         content = "".join(content_parts)
         return hashlib.sha256(content.encode()).hexdigest()
 
-class JoobleEngine:
+class AdzunaEngine:
     def __init__(self):
         load_dotenv()
         
         # Load credentials from .env
-        self.api_key = os.getenv('JOOBLE_API_KEY')
-        self.base_url = f"https://jooble.org/api/{self.api_key}"
+        self.app_id = os.getenv('ADZUNA_APP_ID')
+        self.app_key = os.getenv('ADZUNA_APP_KEY')
         
         # Initialize database
         db_url = os.getenv('DATABASE_URL', 'sqlite:///jobs.db')
@@ -59,14 +59,14 @@ class JoobleEngine:
         self.db.create_tables()
     
     async def connect(self):
-        """Validate API key presence"""
+        """Validate API keys presence"""
         try:
-            if not self.api_key:
-                raise RuntimeError("JOOBLE_API_KEY not found in .env")
-            logger.info("Jooble connected")
+            if not self.app_id or not self.app_key:
+                raise RuntimeError("ADZUNA_APP_ID or ADZUNA_APP_KEY not found in .env")
+            logger.info("Adzuna connected")
             return True
         except Exception as e:
-            logger.error(f"Failed to connect to Jooble: {e}")
+            logger.error(f"Failed to connect to Adzuna: {e}")
             return False
     
     async def get_last_db_timestamp(self) -> datetime:
@@ -74,41 +74,52 @@ class JoobleEngine:
         session = self.db.get_session()
         try:
             latest_job = session.query(Job).filter(
-                Job.source == PlatformEnum.JOOBLE
+                Job.source == PlatformEnum.ADZUNA
             ).order_by(Job.posted_at_source.desc()).first()
             
             if latest_job and latest_job.posted_at_source:
                 return latest_job.posted_at_source
             else:
-                # If no Jooble jobs exist, fetch from last 24 hours
+                # If no Adzuna jobs exist, fetch from last 24 hours
                 return datetime.now() - timedelta(hours=24)
         finally:
             session.close()
     
-    async def fetch_jobs(self, keywords: str, location: str, since_timestamp: datetime) -> List[JoobleJob]:
-        """Fetch jobs from Jooble API"""
+    async def fetch_jobs(self, keywords: str, location: str, since_timestamp: datetime) -> List[AdzunaJob]:
+        """Fetch jobs from Adzuna API"""
         jobs = []
         try:
             logger.info(f"Query found: {keywords}, {location}")
             
-            # Map location for Jooble API
+            # Determine country code from location
+            country = "in"  # default
+            if location.lower() in ['worldwide', 'global', '']:
+                country = "us"  # Use US for worldwide searches
+            
+            # Build dynamic base URL
+            base_url = f"https://api.adzuna.com/v1/api/jobs/{country}/search/1"
+            
+            # Map location for Adzuna API
             api_location = location
             if location.lower() in ['worldwide', 'global']:
                 api_location = ""
             elif location.lower() == 'remote':
                 api_location = "remote"
             
-            payload = {
-                "keywords": keywords,
-                "location": api_location,
-                "page": 1
+            params = {
+                "app_id": self.app_id,
+                "app_key": self.app_key,
+                "what": keywords,
+                "where": api_location,
+                "results_per_page": 50,
+                "content-type": "application/json"
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.base_url, json=payload) as response:
+                async with session.get(base_url, params=params) as response:
                     if response.status == 200:
                         data = await response.json()
-                        job_list = data.get('jobs', [])
+                        job_list = data.get('results', [])
                         
                         for job_data in job_list:
                             job = self._parse_job(job_data)
@@ -117,38 +128,48 @@ class JoobleEngine:
                         
                         logger.info(f"Jobs fetched: {len(jobs)}")
                     else:
-                        logger.error(f"Jooble API error: {response.status}")
+                        logger.error(f"Adzuna API error: {response.status}")
                         
         except Exception as e:
-            logger.error(f"Error fetching from Jooble: {e}")
+            logger.error(f"Error fetching from Adzuna: {e}")
         
         return jobs
     
-    def _parse_job(self, job_data: dict) -> Optional[JoobleJob]:
-        """Parse a Jooble job into normalized Job schema"""
+    def _parse_job(self, job_data: dict) -> Optional[AdzunaJob]:
+        """Parse an Adzuna job into normalized Job schema"""
         try:
             title = job_data.get('title', 'Job Posting')[:100]
-            company = job_data.get('company', 'Unknown Company')
-            location = job_data.get('location', 'Unknown Location')
-            description = job_data.get('snippet', '')
-            apply_link = job_data.get('link')
             
-            # Generate external_id from link hash if no id provided
-            external_id = job_data.get('id')
-            if not external_id and apply_link:
-                external_id = hashlib.md5(apply_link.encode()).hexdigest()[:16]
+            # Handle company field
+            company_data = job_data.get('company', {})
+            if isinstance(company_data, dict):
+                company = company_data.get('display_name', 'Unknown Company')
+            else:
+                company = str(company_data) if company_data else 'Unknown Company'
             
-            # Parse posted date if available
+            # Handle location field
+            location_data = job_data.get('location', {})
+            if isinstance(location_data, dict):
+                location = location_data.get('display_name', 'Unknown Location')
+            else:
+                location = str(location_data) if location_data else 'Unknown Location'
+            
+            description = job_data.get('description', '')
+            apply_link = job_data.get('redirect_url')
+            external_id = str(job_data.get('id', ''))
+            
+            # Parse posted date
             posted_at = None
-            if job_data.get('updated'):
+            if job_data.get('created'):
                 try:
-                    posted_at = datetime.fromisoformat(job_data['updated'].replace('Z', '+00:00'))
+                    # Adzuna uses ISO format dates
+                    posted_at = datetime.fromisoformat(job_data['created'].replace('Z', '+00:00'))
                 except:
                     posted_at = datetime.now()
             else:
                 posted_at = datetime.now()
             
-            return JoobleJob(
+            return AdzunaJob(
                 title=title,
                 company=company,
                 location=location,
@@ -161,11 +182,11 @@ class JoobleEngine:
             logger.error(f"Error parsing job: {e}")
             return None
     
-    def _is_job_newer(self, job: JoobleJob, since_timestamp: datetime) -> bool:
+    def _is_job_newer(self, job: AdzunaJob, since_timestamp: datetime) -> bool:
         """Always return True - timestamp filtering temporarily disabled"""
         return True
     
-    def save_jobs_to_db(self, jobs: List[JoobleJob]) -> tuple[int, int]:
+    def save_jobs_to_db(self, jobs: List[AdzunaJob]) -> tuple[int, int]:
         """Save jobs to database with deduplication"""
         if not jobs:
             return 0, 0
@@ -193,7 +214,7 @@ class JoobleEngine:
                     # Insert job
                     job_entry = Job(
                         hash_id=job_hash.id,
-                        source=PlatformEnum.JOOBLE,
+                        source=PlatformEnum.ADZUNA,
                         external_id=job.external_id,
                         title=job.title[:500],
                         company=job.company[:255],
@@ -232,11 +253,11 @@ class JoobleEngine:
         
         return inserted_count, duplicate_count
 
-async def run_jooble_engine():
+async def run_adzuna_engine():
     """Single entry function that performs one full fetch cycle"""
-    engine = JoobleEngine()
+    engine = AdzunaEngine()
     
-    # Connect to Jooble
+    # Connect to Adzuna
     if not await engine.connect():
         return
     
@@ -247,7 +268,7 @@ async def run_jooble_engine():
         # Load queries from search_queries table
         session = engine.db.get_session()
         queries = session.query(SearchQuery).filter(
-            SearchQuery.platform == PlatformEnum.JOOBLE,
+            SearchQuery.platform == PlatformEnum.ADZUNA,
             SearchQuery.is_active == True
         ).all()
         session.close()
@@ -263,10 +284,10 @@ async def run_jooble_engine():
         # Save to database
         inserted, duplicates = engine.save_jobs_to_db(all_jobs)
         
-        logger.info(f"Jooble cycle complete - Inserted: {inserted}, Duplicates: {duplicates}")
+        logger.info(f"Adzuna cycle complete - Inserted: {inserted}, Duplicates: {duplicates}")
         
     except Exception as e:
-        logger.error(f"Error in Jooble engine: {e}")
+        logger.error(f"Error in Adzuna engine: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(run_jooble_engine())
+    asyncio.run(run_adzuna_engine())

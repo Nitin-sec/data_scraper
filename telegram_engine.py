@@ -1,6 +1,7 @@
 import os
 import logging
 import hashlib
+import sys
 from datetime import datetime, timedelta
 from typing import List, Optional
 from dotenv import load_dotenv
@@ -18,10 +19,14 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("app.log"),
-        logging.StreamHandler()
+        logging.FileHandler("app.log", encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
     ]
 )
+# Set console handler encoding for Windows
+for handler in logging.getLogger().handlers:
+    if isinstance(handler, logging.StreamHandler) and handler.stream == sys.stdout:
+        handler.stream.reconfigure(encoding='utf-8', errors='replace')
 logger = logging.getLogger("TelegramEngine")
 
 class TelegramJob:
@@ -94,14 +99,76 @@ class TelegramEngine:
         finally:
             session.close()
     
+    def _sanitize_for_log(self, text: str) -> str:
+        """Sanitize text for safe logging by removing problematic Unicode characters"""
+        if not text:
+            return text
+        # Replace common problematic Unicode characters
+        return text.encode('ascii', errors='replace').decode('ascii')
+    
+    async def resolve_group_entity(self, group_name: str):
+        """Resolve group string to entity using display name, username, or ID"""
+        try:
+            # First try direct entity resolution (for @username or ID)
+            try:
+                entity = await self.client.get_entity(group_name)
+                title = getattr(entity, 'title', getattr(entity, 'username', str(entity.id)))
+                safe_title = self._sanitize_for_log(title)
+                logger.info(f"Resolved Telegram group: {safe_title} (id={entity.id})")
+                return entity
+            except:
+                pass
+            
+            # Clean group name for comparison - safely handle None
+            group_clean = group_name.replace('@', '').lower() if group_name else ""
+            
+            # Search through dialogs for display name match
+            async for dialog in self.client.iter_dialogs():
+                if not hasattr(dialog, 'entity') or not dialog.entity:
+                    continue
+                    
+                dialog_title = getattr(dialog.entity, 'title', None)
+                dialog_username = getattr(dialog.entity, 'username', None)
+                
+                # Skip if no title or username available
+                if not dialog_title and not dialog_username:
+                    continue
+                
+                # Exact display name match - safely handle None
+                if dialog_title and dialog_title.lower() == group_name.lower():
+                    safe_title = self._sanitize_for_log(dialog_title)
+                    logger.info(f"Resolved Telegram group: {safe_title} (id={dialog.entity.id})")
+                    return dialog.entity
+                
+                # Partial display name match - safely handle None
+                if dialog_title and group_name.lower() in dialog_title.lower():
+                    safe_title = self._sanitize_for_log(dialog_title)
+                    logger.info(f"Resolved Telegram group: {safe_title} (id={dialog.entity.id})")
+                    return dialog.entity
+                
+                # Username match - safely handle None
+                if dialog_username and dialog_username.lower() == group_clean:
+                    safe_title = self._sanitize_for_log(dialog_title or dialog_username)
+                    logger.info(f"Resolved Telegram group: {safe_title} (id={dialog.entity.id})")
+                    return dialog.entity
+            
+            logger.error(f"Telegram group not found: {group_name}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error resolving group {group_name}: {e}")
+            return None
     async def fetch_messages_from_group(self, group_name: str, since: datetime) -> List[TelegramJob]:
         """Fetch messages from a specific group newer than the given timestamp"""
         jobs = []
         try:
-            logger.info(f"Group found: {group_name}")
+            # Resolve group entity first
+            entity = await self.resolve_group_entity(group_name)
+            if not entity:
+                return jobs
             
             message_count = 0
-            async for message in self.client.iter_messages(group_name, limit=500):
+            async for message in self.client.iter_messages(entity, limit=500):
                 message_count += 1
                 
                 # Stop if message is older than our timestamp
@@ -202,10 +269,14 @@ class TelegramEngine:
             
             if inserted_count > 0:
                 session.commit()
-                logger.info(f"New jobs inserted: {inserted_count}")
+                logger.info(f"DB INSERT CONFIRMED: {inserted_count} rows added to jobs table")
             
             if duplicate_count > 0:
                 logger.info(f"Duplicates skipped: {duplicate_count}")
+                
+            # Verify data was actually saved
+            total_jobs = session.query(Job).count()
+            logger.info(f"Total jobs in database: {total_jobs}")
                 
         except Exception as e:
             session.rollback()
