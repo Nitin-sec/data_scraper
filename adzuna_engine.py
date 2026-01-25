@@ -2,6 +2,7 @@ import os
 import logging
 import hashlib
 import aiohttp
+import re
 from datetime import datetime, timedelta
 from typing import List, Optional
 from dotenv import load_dotenv
@@ -35,15 +36,17 @@ class AdzunaJob:
         self.external_id = external_id
     
     def get_content_hash(self) -> str:
-        # Include title, company, apply_link (if exists), and first 200 chars of description
-        content_parts = [
-            self.title.lower().strip(),
-            self.company.lower().strip(),
-            self.apply_link.lower().strip() if self.apply_link else "",
-            self.description[:200].lower().strip()
-        ]
-        content = "".join(content_parts)
-        return hashlib.sha256(content.encode()).hexdigest()
+        """Generate standardized content hash: title + company + location + platform + source_url"""
+        # Normalize all components
+        title_norm = re.sub(r'\s+', ' ', self.title.lower().strip()) if self.title else ""
+        company_norm = re.sub(r'\s+', ' ', self.company.lower().strip()) if self.company else ""
+        location_norm = re.sub(r'\s+', ' ', self.location.lower().strip()) if self.location else ""
+        platform_norm = "adzuna"
+        source_url_norm = self.apply_link.lower().strip() if self.apply_link else ""
+        
+        # Combine all components
+        hash_input = f"{title_norm}|{company_norm}|{location_norm}|{platform_norm}|{source_url_norm}"
+        return hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
 
 class AdzunaEngine:
     def __init__(self):
@@ -91,20 +94,24 @@ class AdzunaEngine:
         try:
             logger.info(f"Query found: {keywords}, {location}")
             
-            # Determine country code from location
-            country = "in"  # default
-            if location.lower() in ['worldwide', 'global', '']:
-                country = "us"  # Use US for worldwide searches
+            # Determine country code from location - India focus
+            country = "in"  # Default to India
+            if location.lower() == 'remote':
+                country = "us"  # Use US for remote searches
             
             # Build dynamic base URL
             base_url = f"https://api.adzuna.com/v1/api/jobs/{country}/search/1"
             
             # Map location for Adzuna API
-            api_location = location
-            if location.lower() in ['worldwide', 'global']:
-                api_location = ""
-            elif location.lower() == 'remote':
+            api_location = "India"  # Default to India
+            if location.lower() == 'remote':
                 api_location = "remote"
+            elif location.lower() in ['hybrid', 'contract']:
+                api_location = location
+            elif location in ['Bangalore', 'Delhi', 'Noida', 'Gurgaon', 'Hyderabad', 'Pune', 'Chennai', 'Mumbai', 'Kolkata']:
+                api_location = location
+            elif location == "":
+                api_location = "India"
             
             params = {
                 "app_id": self.app_id,
@@ -205,49 +212,43 @@ class AdzunaEngine:
                     duplicate_count += 1
                     continue
                 
-                try:
-                    # Insert hash
-                    job_hash = JobHash(content_hash=content_hash)
-                    session.add(job_hash)
-                    session.flush()
-                    
-                    # Insert job
-                    job_entry = Job(
-                        hash_id=job_hash.id,
-                        source=PlatformEnum.ADZUNA,
-                        external_id=job.external_id,
-                        title=job.title[:500],
-                        company=job.company[:255],
-                        location=job.location[:255],
-                        apply_link=job.apply_link,
-                        description_html=job.description,
-                        posted_at_source=job.posted_at,
-                        raw_data={'external_id': job.external_id}
-                    )
-                    session.add(job_entry)
-                    inserted_count += 1
-                    
-                except IntegrityError:
-                    session.rollback()
-                    duplicate_count += 1
-                except Exception as e:
-                    session.rollback()
-                    logger.error(f"Error saving job: {e}")
+                # Insert hash first
+                job_hash = JobHash(content_hash=content_hash)
+                session.add(job_hash)
+                session.flush()  # Get the ID
+                
+                # Insert job
+                job_entry = Job(
+                    hash_id=job_hash.id,
+                    source=PlatformEnum.ADZUNA,
+                    external_id=job.external_id,
+                    title=job.title[:500],
+                    company=job.company[:255],
+                    location=job.location[:255],
+                    apply_link=job.apply_link,
+                    description_html=job.description,
+                    posted_at_source=job.posted_at,
+                    raw_data={'external_id': job.external_id}
+                )
+                session.add(job_entry)
+                inserted_count += 1
             
+            # Single commit at the end
             if inserted_count > 0:
                 session.commit()
-                logger.info(f"DB INSERT CONFIRMED: {inserted_count} rows added to jobs table")
+                logger.info(f"DB COMMIT SUCCESS: {inserted_count} jobs inserted")
             
             if duplicate_count > 0:
                 logger.info(f"Duplicates skipped: {duplicate_count}")
                 
-            # Verify data was actually saved
+            # Post-commit verification
             total_jobs = session.query(Job).count()
-            logger.info(f"Total jobs in database: {total_jobs}")
+            logger.info(f"DB ROW COUNT AFTER ADZUNA: {total_jobs}")
                 
         except Exception as e:
             session.rollback()
             logger.error(f"Database error: {e}")
+            raise
         finally:
             session.close()
         

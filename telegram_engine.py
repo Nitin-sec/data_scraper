@@ -43,15 +43,17 @@ class TelegramJob:
         self.external_id = external_id
     
     def get_content_hash(self) -> str:
-        # Include title, company, apply_link (if exists), and first 200 chars of description
-        content_parts = [
-            self.title.lower().strip(),
-            self.company.lower().strip(),
-            self.apply_link.lower().strip() if self.apply_link else "",
-            self.description[:200].lower().strip()
-        ]
-        content = "".join(content_parts)
-        return hashlib.sha256(content.encode()).hexdigest()
+        """Generate standardized content hash: title + company + location + platform + source_url"""
+        # Normalize all components
+        title_norm = re.sub(r'\s+', ' ', self.title.lower().strip()) if self.title else ""
+        company_norm = re.sub(r'\s+', ' ', self.company.lower().strip()) if self.company else ""
+        location_norm = re.sub(r'\s+', ' ', self.location.lower().strip()) if self.location else ""
+        platform_norm = "telegram"
+        source_url_norm = self.apply_link.lower().strip() if self.apply_link else ""
+        
+        # Combine all components
+        hash_input = f"{title_norm}|{company_norm}|{location_norm}|{platform_norm}|{source_url_norm}"
+        return hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
 
 class TelegramEngine:
     def __init__(self):
@@ -212,7 +214,7 @@ class TelegramEngine:
         return TelegramJob(
             title=title,
             company=company,
-            location="Remote/Telegram",
+            location="India",  # Default to India
             description=text,
             apply_link=apply_link,
             posted_at=message.date,
@@ -220,7 +222,7 @@ class TelegramEngine:
         )
     
     def save_jobs_to_db(self, jobs: List[TelegramJob]) -> tuple[int, int]:
-        """Save jobs to MySQL database with deduplication"""
+        """Save jobs to database with deduplication"""
         if not jobs:
             return 0, 0
         
@@ -238,49 +240,43 @@ class TelegramEngine:
                     duplicate_count += 1
                     continue
                 
-                try:
-                    # Insert hash
-                    job_hash = JobHash(content_hash=content_hash)
-                    session.add(job_hash)
-                    session.flush()
-                    
-                    # Insert job
-                    job_entry = Job(
-                        hash_id=job_hash.id,
-                        source=PlatformEnum.TELEGRAM,
-                        external_id=job.external_id,
-                        title=job.title[:500],
-                        company=job.company[:255],
-                        location=job.location[:255],
-                        apply_link=job.apply_link,
-                        description_html=job.description,
-                        posted_at_source=job.posted_at,
-                        raw_data={'message_id': job.external_id}
-                    )
-                    session.add(job_entry)
-                    inserted_count += 1
-                    
-                except IntegrityError:
-                    session.rollback()
-                    duplicate_count += 1
-                except Exception as e:
-                    session.rollback()
-                    logger.error(f"Error saving job: {e}")
+                # Insert hash first
+                job_hash = JobHash(content_hash=content_hash)
+                session.add(job_hash)
+                session.flush()  # Get the ID
+                
+                # Insert job
+                job_entry = Job(
+                    hash_id=job_hash.id,
+                    source=PlatformEnum.TELEGRAM,
+                    external_id=job.external_id,
+                    title=job.title[:500],
+                    company=job.company[:255],
+                    location=job.location[:255],
+                    apply_link=job.apply_link,
+                    description_html=job.description,
+                    posted_at_source=job.posted_at,
+                    raw_data={'message_id': job.external_id}
+                )
+                session.add(job_entry)
+                inserted_count += 1
             
+            # Single commit at the end
             if inserted_count > 0:
                 session.commit()
-                logger.info(f"DB INSERT CONFIRMED: {inserted_count} rows added to jobs table")
+                logger.info(f"DB COMMIT SUCCESS: {inserted_count} jobs inserted")
             
             if duplicate_count > 0:
                 logger.info(f"Duplicates skipped: {duplicate_count}")
                 
-            # Verify data was actually saved
+            # Post-commit verification
             total_jobs = session.query(Job).count()
-            logger.info(f"Total jobs in database: {total_jobs}")
+            logger.info(f"DB ROW COUNT AFTER TELEGRAM: {total_jobs}")
                 
         except Exception as e:
             session.rollback()
             logger.error(f"Database error: {e}")
+            raise
         finally:
             session.close()
         

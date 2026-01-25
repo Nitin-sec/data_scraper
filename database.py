@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Text, DateTime, Boolean, JSON, ForeignKey, Enum
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, JSON, ForeignKey, Enum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -19,7 +19,7 @@ class PlatformEnum(enum.Enum):
 class JobHash(Base):
     __tablename__ = 'job_hashes'
     
-    id = Column(BigInteger, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     content_hash = Column(String(64), unique=True, nullable=False)
     
     jobs = relationship("Job", back_populates="hash_ref")
@@ -27,7 +27,7 @@ class JobHash(Base):
 class SearchQuery(Base):
     __tablename__ = 'search_queries'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     platform = Column(Enum(PlatformEnum), nullable=False)
     value = Column(String(255), nullable=False)
     location = Column(String(255), nullable=True)
@@ -37,8 +37,8 @@ class SearchQuery(Base):
 class Job(Base):
     __tablename__ = 'jobs'
     
-    id = Column(BigInteger, primary_key=True)
-    hash_id = Column(BigInteger, ForeignKey('job_hashes.id'), nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    hash_id = Column(Integer, ForeignKey('job_hashes.id'), nullable=False)
     source = Column(Enum(PlatformEnum), nullable=False)
     external_id = Column(String(255), nullable=True)
     title = Column(String(500), nullable=False)
